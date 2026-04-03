@@ -1,6 +1,6 @@
 # Tutoriel : Utiliser Claude Code dans VSCode sur le SSPCloud
 
-> **Public visé** : débutantes en programmation souhaitant configurer Claude Code comme assistant de code dans un service VSCode-Python sur le datalab SSPCloud (Onyxia/INSEE).  
+> **Public visé** : débutants en programmation souhaitant configurer Claude Code comme assistant de code dans un service VSCode-Python sur le SSPCloud (datalab Onyxia de l'INSEE).  
 > **Prérequis** : avoir un compte SSPCloud actif et un abonnement Claude Pro ou Max.
 
 ---
@@ -148,7 +148,7 @@ Un assistant de configuration s'affiche :
 
 Tu as deux façons d'interagir avec Claude Code.
 
-### Via la sidebar VSCode (recommandé pour les débutantes)
+### Via la sidebar VSCode (recommandé pour les débutants)
 
 Clique sur l'icône Claude dans la barre latérale gauche de VSCode. Un panneau de chat s'ouvre. Tu peux :
 - Poser des questions en langage naturel sur ton code
