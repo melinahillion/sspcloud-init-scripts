@@ -3,7 +3,7 @@
 # Fourni à Onyxia (une seule URL). Appelle les briques ci-dessous.
 set -e
 
-BASE_URL="https://raw.githubusercontent.com/melinahillion/sspcloud-dotfiles/main"
+BASE_URL="https://raw.githubusercontent.com/melinahillion/sspcloud-init-scripts/main"
 
 echo "=== Init SSPCloud ==="
 
