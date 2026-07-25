@@ -1,4 +1,4 @@
-# sspcloud-dotfiles
+# sspcloud-init-scripts
 
 Scripts d'initialisation pour mes services [SSP Cloud](https://datalab.sspcloud.fr)
 (Onyxia). Un point d'entrée unique (`init.sh`) qui orchestre des briques
