@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # init.sh — orchestrateur d'initialisation SSPCloud
 # Fourni à Onyxia (une seule URL). Appelle les briques ci-dessous.
 set -e
