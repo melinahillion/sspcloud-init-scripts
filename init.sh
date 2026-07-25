@@ -1,16 +1,18 @@
 #!/bin/bash
 # init.sh — orchestrateur d'initialisation SSPCloud
-# Fourni à Onyxia (une seule URL). Appelle les briques ci-dessous.
-set -e
+# C'est la SEULE URL a fournir a Onyxia (champ "script d'initialisation").
+# Il telecharge et execute les briques ci-dessous avec bash (important : le
+# shebang d'un script est ignore quand on le pipe, c'est l'interpreteur
+# invoque ici qui compte).
 
 BASE_URL="https://raw.githubusercontent.com/melinahillion/sspcloud-init-scripts/main"
 
-echo "=== Init SSPCloud ==="
+echo "############ INIT SSPCLOUD : DEBUT ############"
 
-# Brique 1 : Claude Code
-curl -fsSL "$BASE_URL/install_claude.sh" | sh
+echo "---- Brique 1/2 : Claude Code ----"
+curl -fsSL "$BASE_URL/install_claude.sh" | bash
 
-# Brique 2 : configuration Git multi-forges
-curl -fsSL "$BASE_URL/setup_git.sh" | sh
+echo "---- Brique 2/2 : configuration Git ----"
+curl -fsSL "$BASE_URL/setup_git.sh" | bash
 
-echo "=== Init terminé ==="
+echo "############ INIT SSPCLOUD : FIN ############"
