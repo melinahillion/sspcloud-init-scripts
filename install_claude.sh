@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Script d'initialisation SSPCloud — VSCode-Python + Claude Code
 # Installe Node.js, le CLI Claude Code et l'extension VSCode.
