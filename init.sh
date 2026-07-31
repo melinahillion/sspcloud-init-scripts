@@ -1,18 +1,47 @@
 #!/bin/bash
 # init.sh — orchestrateur d'initialisation SSPCloud
-# C'est la SEULE URL a fournir a Onyxia (champ "script d'initialisation").
-# Il telecharge et execute les briques ci-dessous avec bash (important : le
-# shebang d'un script est ignore quand on le pipe, c'est l'interpreteur
-# invoque ici qui compte).
+#
+# C'est la SEULE URL à fournir à Onyxia (champ « script d'initialisation ») :
+#   https://raw.githubusercontent.com/melinahillion/sspcloud-init-scripts/refs/heads/main/init.sh
+#
+# Chaque brique est téléchargée puis exécutée avec bash. Deux précautions :
+#   - le fichier est enregistré avant d'être lancé, ce qui permet de vérifier
+#     qu'il a bien été téléchargé (un « curl | bash » sur un téléchargement
+#     échoué ne fait rien, sans rien dire) ;
+#   - l'échec d'une brique est signalé mais n'interrompt pas les suivantes.
 
 BASE_URL="https://raw.githubusercontent.com/melinahillion/sspcloud-init-scripts/main"
+TRAVAIL="$(mktemp -d)"
 
-echo "############ INIT SSPCLOUD : DEBUT ############"
+echo "############ INIT SSPCLOUD : DÉBUT ############"
+echo "utilisateur : $(id -un) (uid $(id -u))"
 
-echo "---- Brique 1/2 : Claude Code ----"
-curl -fsSL "$BASE_URL/install_claude.sh" | bash
+executer_brique() {
+  local nom="$1" fichier="$TRAVAIL/$1"
+  echo ""
+  echo "---- $nom ----"
 
-echo "---- Brique 2/2 : configuration Git ----"
-curl -fsSL "$BASE_URL/setup_git.sh" | bash
+  if ! curl -fsSL --max-time 60 "$BASE_URL/$nom" -o "$fichier"; then
+    echo "[init] ÉCHEC du téléchargement de $nom depuis $BASE_URL"
+    echo "       Vérifie l'URL du dépôt et que le fichier y est bien poussé."
+    return 1
+  fi
+  if [ ! -s "$fichier" ]; then
+    echo "[init] $nom téléchargé mais vide — brique ignorée."
+    return 1
+  fi
 
+  bash "$fichier"
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    echo "[init] $nom s'est terminé avec le code $code."
+  fi
+  return "$code"
+}
+
+executer_brique "install_claude.sh"
+executer_brique "setup_git.sh"
+
+rm -rf "$TRAVAIL"
+echo ""
 echo "############ INIT SSPCLOUD : FIN ############"
