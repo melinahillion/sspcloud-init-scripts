@@ -1,193 +1,277 @@
 #!/bin/bash
-# install_claude.sh — v5 : Node.js, CLI Claude Code, extension VSCode
+# install_claude.sh — v6 : Claude Code prêt à l'emploi, sans « claude login »
 #
-# Reprend la procédure manuelle qui fonctionne, avec deux corrections :
+# Ce que fait ce script, au démarrage du service VSCode-Python :
+#   1. installe Claude Code avec l'installateur officiel (aucun Node.js requis) ;
+#   2. récupère le token d'abonnement dans le Vault SSPCloud ;
+#   3. saute l'écran d'accueil, choisit le thème sombre et fait confiance
+#      au dossier ~/work (plus de questions au premier lancement) ;
+#   4. fixe des permissions raisonnables (ce que Claude peut faire sans demander)
+#      et écrit des consignes générales (~/.claude/CLAUDE.md) ;
+#   5. installe l'extension VSCode ;
+#   6. rend tout cela actif dans chaque nouveau terminal.
 #
-#   - NodeSource en **22.x** et non 20.x : Claude Code exige Node >= 22
-#     (sinon « npm WARN EBADENGINE » et un fonctionnement incertain) ;
-#   - on installe le paquet « nodejs » SEUL. Il embarque npm. Ajouter le paquet
-#     « npm » de Debian tirerait deux cents dépendances système (eslint,
-#     webpack, babel…) dont on n'a aucun besoin.
+# ---------------------------------------------------------------------------
+# PRÉREQUIS (une seule fois, à refaire environ tous les ans) :
+# créer le token d'abonnement Claude et le ranger dans le Vault SSPCloud
+# ---------------------------------------------------------------------------
 #
-# Une seconde voie, sans aucun droit administrateur, prend le relais si
-# NodeSource échoue : l'archive officielle dépliée dans ~/.local/node.
+# Le token permet à Claude Code de se connecter à ton abonnement Pro ou Max
+# sans passer par « claude login ». Il est valable environ un an.
 #
-# L'authentification reste manuelle : lancer « claude login » dans le terminal.
+# A. Obtenir le token
+#    1. Ouvre un terminal dans un service où Claude Code est installé
+#       (ce service, une fois ce script lancé, convient très bien).
+#    2. Tape :
+#           claude setup-token
+#    3. Un lien s'affiche : ouvre-le dans ton navigateur et connecte-toi avec
+#       ton compte claude.ai (celui de ton abonnement), comme pour « claude login ».
+#    4. Si un code t'est demandé, colle-le dans le terminal puis appuie sur Entrée
+#       (deux fois si rien ne se passe).
+#    5. Le terminal affiche un long token qui commence par « sk-ant-oat01- ».
+#       Copie-le EN ENTIER.
+#
+# B. Le ranger dans le Vault
+#    1. Sur https://datalab.sspcloud.fr, ouvre « Mes secrets ».
+#    2. Crée un nouveau secret nommé exactement « claude », à la racine de ton
+#       espace (pas dans un sous-dossier).
+#    3. Ajoute-lui une variable :
+#           clé    : CLAUDE_CODE_OAUTH_TOKEN
+#           valeur : le token copié à l'étape A.5
+#    4. Relance ton service VSCode-Python : le script lira le token tout seul.
+#
+# ATTENTION : ce token donne accès à ton abonnement, comme un mot de passe.
+# Ne le colle jamais dans un fichier, un notebook ou un dépôt Git.
+# Ce script ne le contient pas : il va le chercher dans le Vault au démarrage,
+# il peut donc être publié sur GitHub sans risque.
+#
+# Quand le token expire (Claude te redemande de te connecter), refais A puis
+# remplace la valeur dans le secret « claude ».
+#
+# Plan B : si claude.ai est inaccessible depuis le pod, utiliser la v5 (Node + npm).
 
 set -u
 
+# ---------------------------------------------------------------------------
+# 0. Réglages — à adapter si besoin
+# ---------------------------------------------------------------------------
 USER_HOME="/home/onyxia"
-NPM_PREFIX="$USER_HOME/.npm-global"
-NODE_LOCAL="$USER_HOME/.local/node"
+SECRET_NAME="claude"                 # nom du secret dans « Mes secrets »
+DOSSIER_DE_CONFIANCE="$USER_HOME/work"
+THEME="dark"                         # dark, light, dark-daltonized, light-daltonized…
+
+CLAUDE_BIN="$USER_HOME/.local/bin/claude"
+CLAUDE_JSON="$USER_HOME/.claude.json"
+CLAUDE_DIR="$USER_HOME/.claude"
+SETTINGS="$CLAUDE_DIR/settings.json"
+TOKEN_FILE="$CLAUDE_DIR/.oauth_token"
 BASHRC="$USER_HOME/.bashrc"
 
-MAJEUR_REQUIS=22                  # exigé par @anthropic-ai/claude-code
-VERSION_SECOURS="v22.11.0"        # si la version LTS ne peut pas être lue
-
-echo "=== [Claude Code] Installation ==="
+echo "=== [Claude Code] Installation (v6) ==="
 echo "[contexte] utilisateur : $(id -un) (uid $(id -u))"
 
-SUDO=""
-if [ "$(id -u)" != "0" ]; then
-  sudo -n true 2>/dev/null && SUDO="sudo -n"
-fi
-
-export PATH="$NODE_LOCAL/bin:$NPM_PREFIX/bin:$PATH"
-
-version_majeure() {
-  command -v node >/dev/null 2>&1 || return 1
-  node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1
-}
-node_ok() {
-  local m; m=$(version_majeure) || return 1
-  [ -n "$m" ] && [ "$m" -ge "$MAJEUR_REQUIS" ] 2>/dev/null
+# Exécute une commande sous l'identité onyxia, même si le script tourne en root :
+# sinon les fichiers appartiendraient à root et seraient inutilisables.
+en_onyxia() {
+  if [ "$(id -u)" = "0" ]; then
+    su onyxia -s /bin/bash -c "$1"
+  else
+    bash -c "$1"
+  fi
 }
 
 # ---------------------------------------------------------------------------
-# 1. Node.js
+# 1. Installation de Claude Code (installateur officiel, sans Node.js)
 # ---------------------------------------------------------------------------
 echo ""
-if node_ok; then
-  echo "[Node] déjà présent et suffisant : $(node --version)"
+echo "[1/6] Installation de Claude Code..."
+en_onyxia "curl -fsSL https://claude.ai/install.sh | bash" \
+  || echo "  (l'installateur a échoué — essayer la v5 en plan B)"
+
+if [ -x "$CLAUDE_BIN" ]; then
+  echo "  OK : $("$CLAUDE_BIN" --version 2>/dev/null)"
 else
-  presente=$(version_majeure || echo "")
-  [ -n "$presente" ] && echo "[Node] présent en v$presente — trop ancien " \
-                             "(>= $MAJEUR_REQUIS requis)"
+  echo "  ÉCHEC : $CLAUDE_BIN introuvable"
+fi
 
-  echo "[Node] Voie 1/2 : dépôt NodeSource ${MAJEUR_REQUIS}.x"
-  if [ -n "$SUDO" ] || [ "$(id -u)" = "0" ]; then
-    if curl -fsSL "https://deb.nodesource.com/setup_${MAJEUR_REQUIS}.x" \
-            -o /tmp/nodesource.sh; then
-      # « nodejs » seul : il embarque npm.
-      $SUDO bash /tmp/nodesource.sh \
-        && $SUDO apt-get install -y nodejs \
-        || echo "  (NodeSource a échoué)"
-      rm -f /tmp/nodesource.sh
-    else
-      echo "  téléchargement du dépôt impossible (réseau filtré ?)"
-    fi
-  else
-    echo "  ignorée : ni root ni sudo"
-  fi
+# ---------------------------------------------------------------------------
+# 2. Récupération du token d'abonnement dans le Vault
+# ---------------------------------------------------------------------------
+echo ""
+echo "[2/6] Récupération du token dans le Vault..."
+mkdir -p "$CLAUDE_DIR"
+TOKEN=""
 
-  # -- Voie 2 : archive officielle, sans droits administrateur --------------
-  if ! node_ok; then
-    echo ""
-    echo "[Node] Voie 2/2 : archive officielle, en espace utilisateur"
-
-    VERSION=$(curl -fsS --max-time 15 https://nodejs.org/dist/index.json 2>/dev/null \
-      | python3 -c "
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  # Cas où Onyxia a déjà injecté le secret comme variable d'environnement
+  TOKEN="$CLAUDE_CODE_OAUTH_TOKEN"
+  echo "  token déjà présent dans l'environnement"
+elif [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ] && [ -n "${VAULT_TOP_DIR:-}" ]; then
+  TOKEN=$(curl -fsS --max-time 15 -H "X-Vault-Token: $VAULT_TOKEN" \
+      "$VAULT_ADDR/v1/${VAULT_MOUNT:-onyxia-kv}/data/$VAULT_TOP_DIR/$SECRET_NAME" \
+      2>/dev/null \
+    | python3 -c "
 import json, sys
 try:
-    versions = json.load(sys.stdin)
+    print(json.load(sys.stdin)['data']['data'].get('CLAUDE_CODE_OAUTH_TOKEN', '').strip())
 except Exception:
-    sys.exit(1)
-for v in versions:                    # trié du plus récent au plus ancien
-    if v.get('lts') and int(v['version'].lstrip('v').split('.')[0]) >= $MAJEUR_REQUIS:
-        print(v['version']); break
+    pass
 " 2>/dev/null)
-
-    if [ -z "${VERSION:-}" ]; then
-      VERSION="$VERSION_SECOURS"
-      echo "  version LTS non déterminée, on prend $VERSION"
-    else
-      echo "  dernière version LTS : $VERSION"
-    fi
-
-    ARCHIVE="/tmp/node-${VERSION}.tar.xz"
-    URL="https://nodejs.org/dist/${VERSION}/node-${VERSION}-linux-x64.tar.xz"
-    if curl -fsSL --max-time 180 "$URL" -o "$ARCHIVE"; then
-      rm -rf "$NODE_LOCAL"; mkdir -p "$NODE_LOCAL"
-      tar -xJf "$ARCHIVE" -C "$NODE_LOCAL" --strip-components=1 \
-        && echo "  déplié dans $NODE_LOCAL" \
-        || echo "  ÉCHEC de l'extraction"
-      rm -f "$ARCHIVE"
-    else
-      echo "  téléchargement impossible : $URL"
-    fi
-  fi
-fi
-
-if ! node_ok; then
-  echo ""
-  echo "[Node] ÉCHEC : aucune version >= $MAJEUR_REQUIS disponible."
-  echo "       version en place : $(version_majeure || echo aucune)"
-  echo "       Lance « bash diag_node.sh » pour voir ce que le pod peut joindre."
-  exit 0        # on n'interrompt pas le reste de l'initialisation
-fi
-echo ""
-echo "[Node] $(node --version) — npm $(npm --version) — $(command -v node)"
-
-# ---------------------------------------------------------------------------
-# 2. npm en espace utilisateur, puis le CLI
-# ---------------------------------------------------------------------------
-echo ""
-echo "[Claude Code] Installation de @anthropic-ai/claude-code..."
-mkdir -p "$NPM_PREFIX"
-
-if [ "$(id -u)" = "0" ]; then
-  # Sous l'identité onyxia : sinon les fichiers appartiendraient à root et
-  # l'utilisatrice ne pourrait plus les mettre à jour.
-  chown -R onyxia:onyxia "$NPM_PREFIX" 2>/dev/null || true
-  [ -d "$NODE_LOCAL" ] && chown -R onyxia:onyxia "$NODE_LOCAL" 2>/dev/null || true
-  su onyxia -s /bin/bash -c \
-    "export PATH='$NODE_LOCAL/bin:$NPM_PREFIX/bin:\$PATH'; \
-     npm config set prefix '$NPM_PREFIX' && \
-     npm install -g @anthropic-ai/claude-code" \
-    || echo "  (installation du CLI en échec)"
-else
-  npm config set prefix "$NPM_PREFIX" \
-    && npm install -g @anthropic-ai/claude-code \
-    || echo "  (installation du CLI en échec)"
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Extension VSCode
-# ---------------------------------------------------------------------------
-echo ""
-if command -v code-server >/dev/null 2>&1; then
-  echo "[VSCode] Installation de l'extension anthropic.claude-code..."
-  if [ "$(id -u)" = "0" ]; then
-    su onyxia -s /bin/bash -c \
-      "code-server --install-extension anthropic.claude-code" \
-      || echo "  (extension non installée)"
+  if [ -n "$TOKEN" ]; then
+    echo "  token lu dans le secret « $SECRET_NAME »"
   else
-    code-server --install-extension anthropic.claude-code \
-      || echo "  (extension non installée)"
+    echo "  token introuvable : vérifier le secret « $SECRET_NAME » et la clé CLAUDE_CODE_OAUTH_TOKEN"
   fi
 else
-  echo "[VSCode] code-server absent : extension ignorée"
+  echo "  variables Vault absentes : le token ne peut pas être lu"
 fi
 
-# ---------------------------------------------------------------------------
-# 4. PATH persistant, droits, vérification
-# ---------------------------------------------------------------------------
-if ! grep -q '.npm-global/bin' "$BASHRC" 2>/dev/null; then
-  {
-    echo ''
-    echo '# Node et Claude Code en espace utilisateur.'
-    echo '# Placés AVANT le PATH système, pour primer sur un Node plus ancien.'
-    echo 'export PATH="$HOME/.local/node/bin:$HOME/.npm-global/bin:$PATH"'
-  } >> "$BASHRC"
-  echo ""
-  echo "[PATH] complété dans .bashrc"
-fi
-
-mkdir -p "$USER_HOME/.claude"
-if [ "$(id -u)" = "0" ]; then
-  chown -R onyxia:onyxia "$USER_HOME/.claude" "$NPM_PREFIX" "$BASHRC" \
-    2>/dev/null || true
-  [ -d "$NODE_LOCAL" ] && chown -R onyxia:onyxia "$NODE_LOCAL" 2>/dev/null || true
-fi
-
-echo ""
-if [ -x "$NPM_PREFIX/bin/claude" ]; then
-  echo "[Claude Code] OK — $("$NPM_PREFIX/bin/claude" --version 2>/dev/null \
-        || echo 'installé')"
-  echo "[Claude Code] Node utilisé : $(node --version)"
-  echo "[Claude Code] Ouvre un NOUVEAU terminal (pour recharger le PATH),"
-  echo "              puis : claude login"
+if [ -n "$TOKEN" ]; then
+  # Fichier lisible par toi seule (droits 600)
+  printf '%s' "$TOKEN" > "$TOKEN_FILE"
+  chmod 600 "$TOKEN_FILE"
 else
-  echo "[Claude Code] ÉCHEC : rien dans $NPM_PREFIX/bin"
+  echo "  → sans token, il faudra faire « claude login » à la main"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Fin des questions du premier lancement (~/.claude.json)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[3/6] Accueil sauté, thème « $THEME », confiance accordée à $DOSSIER_DE_CONFIANCE..."
+python3 - "$CLAUDE_JSON" "$DOSSIER_DE_CONFIANCE" "$THEME" <<'EOF'
+import json, os, sys
+chemin, dossier, theme = sys.argv[1], sys.argv[2], sys.argv[3]
+
+config = {}
+if os.path.exists(chemin) and os.path.getsize(chemin) > 0:
+    try:
+        with open(chemin) as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+
+config["hasCompletedOnboarding"] = True      # pas d'écran d'accueil
+config["theme"] = theme                      # pas de question sur le thème
+projet = config.setdefault("projects", {}).setdefault(dossier, {})
+projet["hasTrustDialogAccepted"] = True      # pas de « Do you trust this folder? »
+projet["hasCompletedProjectOnboarding"] = True
+
+with open(chemin, "w") as f:
+    json.dump(config, f, indent=2)
+EOF
+echo "  OK"
+
+# ---------------------------------------------------------------------------
+# 4. Permissions et token pour l'extension (~/.claude/settings.json)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[4/6] Permissions globales..."
+python3 - "$SETTINGS" "$TOKEN_FILE" <<'EOF'
+import json, os, sys
+chemin, fichier_token = sys.argv[1], sys.argv[2]
+
+reglages = {
+    "permissions": {
+        # Autorisé sans demander : commandes qui lisent ou testent, sans rien casser
+        "allow": [
+            "Bash(git status)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(ls:*)",
+            "Bash(cat:*)",
+            "Bash(head:*)",
+            "Bash(wc:*)",
+            "Bash(python:*)",
+            "Bash(pytest:*)",
+            "Bash(ruff:*)",
+            "Bash(uv:*)"
+        ],
+        # Interdit, toujours (bloqué par le programme Claude Code)
+        "deny": [
+            "Bash(rm -rf:*)",
+            "Bash(sudo:*)"
+        ]
+    }
+}
+
+# Le token est aussi transmis ici pour que l'extension VSCode, qui ne lit pas
+# .bashrc, soit connectée elle aussi.
+if os.path.exists(fichier_token):
+    with open(fichier_token) as f:
+        token = f.read().strip()
+    if token:
+        reglages["env"] = {"CLAUDE_CODE_OAUTH_TOKEN": token}
+
+with open(chemin, "w") as f:
+    json.dump(reglages, f, indent=2)
+os.chmod(chemin, 0o600)
+EOF
+echo "  OK"
+
+# Consignes générales, lues par Claude au début de chaque session
+# (~/.claude/CLAUDE.md s'applique à tous les projets)
+cat > "$CLAUDE_DIR/CLAUDE.md" <<'EOF'
+# Consignes générales
+
+## Commandes administrateur (sudo)
+Tu n'as pas le droit d'utiliser sudo : ces commandes sont bloquées.
+Si une action nécessite des droits administrateur, arrête-toi et explique-moi :
+1. pourquoi c'est nécessaire ;
+2. la commande exacte à copier-coller dans le terminal ;
+3. ce que fait cette commande, en termes simples ;
+4. comment vérifier qu'elle a fonctionné.
+Attends ensuite que je te confirme l'avoir lancée avant de continuer.
+EOF
+echo "  consignes générales écrites dans ~/.claude/CLAUDE.md"
+
+# ---------------------------------------------------------------------------
+# 5. Extension VSCode
+# ---------------------------------------------------------------------------
+echo ""
+echo "[5/6] Extension VSCode..."
+if command -v code-server >/dev/null 2>&1; then
+  en_onyxia "code-server --install-extension anthropic.claude-code" \
+    || echo "  (extension non installée)"
+else
+  echo "  code-server absent : extension ignorée"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Terminal : PATH et token dans chaque nouveau terminal (.bashrc)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[6/6] Configuration du terminal..."
+if ! grep -q '>>> claude-code >>>' "$BASHRC" 2>/dev/null; then
+  cat >> "$BASHRC" <<'EOF'
+
+# >>> claude-code >>>
+export PATH="$HOME/.local/bin:$PATH"
+if [ -r "$HOME/.claude/.oauth_token" ]; then
+  export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude/.oauth_token")"
+fi
+# <<< claude-code <<<
+EOF
+  echo "  .bashrc complété"
+else
+  echo "  .bashrc déjà configuré"
+fi
+
+# Droits : tout doit appartenir à onyxia
+if [ "$(id -u)" = "0" ]; then
+  chown -R onyxia:onyxia "$CLAUDE_DIR" "$CLAUDE_JSON" "$BASHRC" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# Bilan
+# ---------------------------------------------------------------------------
+echo ""
+if [ -x "$CLAUDE_BIN" ] && [ -s "$TOKEN_FILE" ]; then
+  echo "[Claude Code] Prêt : ouvre un NOUVEAU terminal et tape « claude »."
+elif [ -x "$CLAUDE_BIN" ]; then
+  echo "[Claude Code] Installé, mais sans token : ouvre un nouveau terminal"
+  echo "              et fais « claude login »."
+else
+  echo "[Claude Code] Installation incomplète : relire les messages ci-dessus."
 fi
 echo "=== [Claude Code] Fin ==="
